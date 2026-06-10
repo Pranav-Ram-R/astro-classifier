@@ -38,6 +38,36 @@ CHECKPOINT_PATH = os.environ.get(
     "checkpoints/baseline_resnet50.pt",
 )
 
+# ---------- fetch checkpoint from Google Drive (Streamlit Cloud) ----------
+
+@st.cache_resource(show_spinner="Downloading model from Google Drive…")
+def ensure_checkpoint(path: str) -> bool:
+    """Download the checkpoint from a shared Drive folder on first run.
+
+    Streamlit Cloud has an ephemeral filesystem and no `.pt` is committed to
+    the repo, so we pull the `checkpoints/` contents (the `.pt` plus
+    `ood_thresholds.json`) from Google Drive once per container.
+
+    Set the Drive *folder* ID in the app's **Settings → Secrets** as
+    `GDRIVE_FOLDER_ID`, or via the env var of the same name. The folder must be
+    shared as "Anyone with the link". Returns True if the checkpoint is present.
+    """
+    if Path(path).is_file():
+        return True
+
+    folder_id = st.secrets.get("GDRIVE_FOLDER_ID", os.environ.get("GDRIVE_FOLDER_ID"))
+    if not folder_id:
+        return False
+
+    out_dir = Path(path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    gdown.download_folder(
+        id=folder_id,
+        output=str(out_dir),
+        quiet=False,
+        use_cookies=False,
+    )
+    return Path(path).is_file()
 
 # ---------- model loading (cached) ----------
 
