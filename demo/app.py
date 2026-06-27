@@ -12,8 +12,10 @@ For deployment notes see README.md.
 
 import json as _json
 import os
+import re
 from pathlib import Path
 
+import gdown
 import numpy as np
 import streamlit as st
 import torch
@@ -40,34 +42,74 @@ CHECKPOINT_PATH = os.environ.get(
 
 # ---------- fetch checkpoint from Google Drive (Streamlit Cloud) ----------
 
+def _extract_drive_id(value: str) -> str:
+    """Accept either a bare Drive ID or a full share URL and return the ID."""
+    value = value.strip()
+    # …/folders/<ID>?…  or  …/file/d/<ID>/…  or  …?id=<ID>
+    m = re.search(r"/(?:folders|d)/([A-Za-z0-9_-]+)", value)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&]id=([A-Za-z0-9_-]+)", value)
+    if m:
+        return m.group(1)
+    return value  # already a bare ID
+
+
 @st.cache_resource(show_spinner="Downloading model from Google Drive…")
-def ensure_checkpoint(path: str) -> bool:
+def ensure_checkpoint(path: str) -> tuple[bool, str]:
     """Download the checkpoint from a shared Drive folder on first run.
 
     Streamlit Cloud has an ephemeral filesystem and no `.pt` is committed to
     the repo, so we pull the `checkpoints/` contents (the `.pt` plus
     `ood_thresholds.json`) from Google Drive once per container.
 
-    Set the Drive *folder* ID in the app's **Settings → Secrets** as
-    `GDRIVE_FOLDER_ID`, or via the env var of the same name. The folder must be
-    shared as "Anyone with the link". Returns True if the checkpoint is present.
+    Set the Drive *folder* ID (or its share URL) in the app's
+    **Settings → Secrets** as `GDRIVE_FOLDER_ID`, or via the env var of the
+    same name. The folder must be shared as "Anyone with the link".
+    Returns (ok, message) where message explains any failure.
     """
     if Path(path).is_file():
-        return True
+        return True, "already present"
 
-    folder_id = st.secrets.get("GDRIVE_FOLDER_ID", os.environ.get("GDRIVE_FOLDER_ID"))
-    if not folder_id:
-        return False
+    raw = st.secrets.get("GDRIVE_FOLDER_ID", os.environ.get("GDRIVE_FOLDER_ID"))
+    if not raw:
+        return False, "GDRIVE_FOLDER_ID is not set in Secrets."
 
+    folder_id = _extract_drive_id(str(raw))
     out_dir = Path(path).parent
     out_dir.mkdir(parents=True, exist_ok=True)
-    gdown.download_folder(
-        id=folder_id,
-        output=str(out_dir),
-        quiet=False,
-        use_cookies=False,
+
+    try:
+        gdown.download_folder(
+            id=folder_id,
+            output=str(out_dir),
+            quiet=False,
+            use_cookies=False,
+        )
+    except Exception as exc:  # surface the real reason instead of "no model"
+        return False, f"gdown failed: {exc}"
+
+    # gdown often nests files under a subdir named after the remote folder.
+    # Flatten: move any matching files we find up into out_dir.
+    target = Path(path)
+    if not target.is_file():
+        for found in out_dir.rglob(target.name):
+            found.replace(target)
+            break
+    for found in out_dir.rglob("ood_thresholds.json"):
+        dest = out_dir / "ood_thresholds.json"
+        if found != dest:
+            found.replace(dest)
+        break
+
+    if target.is_file():
+        return True, "downloaded"
+    listing = ", ".join(p.name for p in out_dir.rglob("*") if p.is_file()) or "(empty)"
+    return False, (
+        f"download finished but {target.name!r} not found. "
+        f"Files pulled: {listing}. Check the folder is shared 'Anyone with the link'."
     )
-    return Path(path).is_file()
+
 
 # ---------- model loading (cached) ----------
 
@@ -133,6 +175,7 @@ with st.sidebar:
     )
 
     st.divider()
+    ok, msg = ensure_checkpoint(CHECKPOINT_PATH)
     bundle = load_model_cached(CHECKPOINT_PATH)
     if bundle is not None:
         st.success(f"Model loaded on **{bundle['device']}**")
@@ -141,6 +184,7 @@ with st.sidebar:
     else:
         st.error("No checkpoint found")
         st.caption(f"Looked at: `{CHECKPOINT_PATH}`")
+        st.caption(f"Download status: {msg}")
 
 
 # ----- Main area -----
