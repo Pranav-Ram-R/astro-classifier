@@ -241,12 +241,12 @@ left, right = st.columns([1, 1])
 
 with left:
     st.subheader("Input")
-    st.image(image, use_container_width=True)
+    st.image(image, width="stretch")
 
     if show_gradcam and result.heatmap is not None:
         st.subheader("Grad-CAM overlay")
         overlay = overlay_heatmap(result.input_image, result.heatmap, alpha=overlay_alpha)
-        st.image(overlay, use_container_width=True)
+        st.image(overlay, width="stretch")
         st.caption(
             "Bright regions = strongest evidence for the predicted class. "
             "If the highlight is on background or borders, the model may be "

@@ -52,8 +52,15 @@ def overlay_heatmap(image: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45)
     matplotlib is imported lazily so the inference module doesn't pull in the
     plotting stack when callers don't need overlays.
     """
-    import matplotlib.cm as cm
-    colored = cm.get_cmap("jet")(heatmap)[..., :3]   # drop alpha channel
+    # matplotlib.cm.get_cmap was removed in matplotlib 3.9; use the
+    # colormaps registry, falling back to the old API on older versions.
+    try:
+        import matplotlib
+        cmap = matplotlib.colormaps["jet"]
+    except (ImportError, AttributeError, KeyError):
+        import matplotlib.cm as cm
+        cmap = cm.get_cmap("jet")
+    colored = cmap(heatmap)[..., :3]   # drop alpha channel
     return np.clip((1 - alpha) * image + alpha * colored, 0, 1)
 
 
